@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Banco local e uploads (não vão para a imagem)
+backend/crm.db
+backend/uploads/*
+
+# Suíte de testes: roda no GitHub Actions, não em produção
+backend/tests/
+backend/pytest.ini
+.pytest_cache/
+
+# Ambiente / IDE
+.env
+.git
+.gitignore
+.idea/
+.vscode/
+
+# Scripts locais
+run.bat

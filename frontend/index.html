@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <!-- Os marcadores MARCA_* entre chaves duplas são trocados pelo backend ao servir (app/marca.py). -->
+  <title>{{MARCA_NOME}}</title>
+  <meta name="application-name" content="{{MARCA_NOME_CURTO}}" />
+
+  <!-- PWA / instalação no iPhone e Android -->
+  <meta name="theme-color" content="#14283d" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="{{MARCA_LOGO_VERTICAL}}" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="{{MARCA_NOME_CURTO}}" />
+
+  <!-- Aplica o tema (claro/escuro) antes da renderização para evitar flash -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("crm_theme") || "light";
+        document.documentElement.setAttribute("data-bs-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+
+  <!-- Tipografia premium -->
+  <!-- Fontes AUTO-HOSPEDADAS (assets/fontes). Vinham do Google, e cada
+       carregamento entregava IP e User-Agent de quem esta logado a ele. -->
+  <link href="/static/assets/fontes/fontes.css" rel="stylesheet" />
+
+  <link href="/static/vendor/bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+  <link href="/static/vendor/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="/static/style.css?v=ui15" rel="stylesheet" />
+</head>
+<body>
+
+  <!-- ============ LOGIN ============ -->
+  <div id="login-screen">
+    <div class="card login-card">
+      <div class="text-center mb-4">
+        <img src="{{MARCA_LOGO_VERTICAL}}" class="login-seal" alt="{{MARCA_NOME}}"
+             data-on-error="acImgOcultar" />
+        <h4 class="mt-2 mb-1">Bem-vindo</h4>
+        <div class="login-sub">Acesse o sistema jurídico</div>
+      </div>
+      <form id="login-form">
+        <div class="mb-3">
+          <label class="form-label">Usuário</label>
+          <input type="text" id="login-email" class="form-control" placeholder="seu usuário" required />
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Senha</label>
+          <input type="password" id="login-password" class="form-control" placeholder="••••••••" required />
+        </div>
+        <div id="otp-wrap" class="mb-3 d-none">
+          <label class="form-label">Código de verificação (2FA)</label>
+          <input type="text" id="login-otp" class="form-control" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" />
+        </div>
+        <div id="login-error" class="alert alert-danger py-2 d-none"></div>
+        <button type="submit" class="btn btn-gold w-100">Entrar</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ APP ============ -->
+  <div id="app" class="d-none">
+    <nav class="sidebar">
+      <div class="brand-wrap">
+        {{MARCA_TOPO_BARRA}}
+      </div>
+      <ul class="nav flex-column">
+        <li><a class="nav-link active" data-view="dashboard"><i class="bi bi-grid-1x2-fill"></i>Dashboard</a></li>
+        <li><a class="nav-link" data-view="clients"><i class="bi bi-people"></i>Clientes</a></li>
+        <li><a class="nav-link" data-view="processes"><i class="bi bi-folder2-open"></i>Processos</a></li>
+        <li><a class="nav-link" data-view="deadlines"><i class="bi bi-alarm"></i>Prazos</a></li>
+        <li><a class="nav-link" data-view="appointments"><i class="bi bi-calendar-event"></i>Agenda</a></li>
+        <li><a class="nav-link" data-view="documents"><i class="bi bi-file-earmark-text"></i>Documentos</a></li>
+        <li id="nav-funil"><a class="nav-link" data-view="pipeline"><i class="bi bi-kanban"></i>Funil</a></li>
+        <div class="nav-section">Módulos</div>
+        <li><a class="nav-link" data-view="financeiro"><i class="bi bi-cash-coin"></i>Financeiro</a></li>
+        <li><a class="nav-link" data-view="precatorios"><i class="bi bi-table"></i>Precatórios</a></li>
+        <li><a class="nav-link" data-view="funilprec"><i class="bi bi-kanban-fill"></i>Funil Precatórios</a></li>
+        <li><a class="nav-link" data-view="acoes"><i class="bi bi-briefcase"></i>Ações Gerais</a></li>
+        <li><a class="nav-link" data-view="assinaturas"><i class="bi bi-pen"></i>Assinaturas</a></li>
+        <li id="nav-monitoramento"><a class="nav-link" data-view="monitoramento"><i class="bi bi-broadcast-pin"></i>Monitoramento</a></li>
+        <li id="nav-usuarios" style="display:none"><a class="nav-link" data-view="usuarios"><i class="bi bi-person-gear"></i>Usuários</a></li>
+        <li id="nav-auditoria" style="display:none"><a class="nav-link" data-view="auditoria"><i class="bi bi-shield-check"></i>Auditoria</a></li>
+        <li id="nav-ia" style="display:none"><a class="nav-link" data-view="ia"><i class="bi bi-robot"></i>IA Jurídica</a></li>
+      </ul>
+
+      <!-- Encarregado pelo tratamento de dados (art. 41 da LGPD). Vem da marca
+           (app/marca.py); com o encarregado vazio, o bloco não aparece. O CRM
+           é ferramenta interna: isto não substitui a política publicada no site
+           do escritório — é o caminho operacional de quem atende. -->
+      {{LGPD_ENCARREGADO}}
+    </nav>
+
+    <div class="main-content">
+      <div class="topbar">
+        <h3 id="view-title">Dashboard</h3>
+        <div class="user-chip">
+          <span class="avatar" id="user-avatar">A</span>
+          <span id="user-name" class="small text-muted"></span>
+          <button id="nav-bell" class="btn btn-sm btn-outline-secondary ms-2 position-relative" title="Novidades: movimentações e publicações" data-on-click="abrirSino" style="display:none">
+            <i class="bi bi-bell"></i>
+            <span id="bell-count" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none">0</span>
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" title="Alternar tema claro/escuro" data-on-click="toggleTheme">
+            <i id="theme-icon" class="bi bi-moon-stars"></i>
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" title="Alterar minha senha" data-on-click="alterarSenhaModal">
+            <i class="bi bi-key"></i>
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" title="Segurança / 2FA" data-on-click="segurancaModal">
+            <i class="bi bi-shield-lock"></i>
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" title="Sair" data-on-click="logout">
+            <i class="bi bi-box-arrow-right"></i>
+          </button>
+        </div>
+      </div>
+      <div id="view-container"></div>
+    </div>
+  </div>
+
+  <div id="modal-container"></div>
+
+  <div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="toast" class="toast align-items-center text-white bg-dark border-0" role="alert">
+      <div class="d-flex">
+        <div class="toast-body" id="toast-body"></div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
+  <script src="/static/vendor/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="/static/vendor/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- QR para 2FA -->
+  <script src="/static/app.js?v=ui77"></script>
+  <!-- Ficha única de Cliente e Processo (out/2026). Vêm DEPOIS do app.js
+       porque usam as funções dele (api, esc, registrarAcoes...). O app.js só
+       inicia a sessão no DOMContentLoaded, quando os quatro já rodaram.
+       ⚠️ Mudou um deles? Suba o ?v= de TODOS junto com o do app.js. -->
+  <script src="/static/ficha.js?v=ui77"></script>
+  <script src="/static/ficha-modulos.js?v=ui77"></script>
+  <script src="/static/ficha-cliente.js?v=ui77"></script>
+  <script src="/static/ficha-processo.js?v=ui77"></script>
+  <script>
+    // Alternância de tema claro/escuro (data-bs-theme controla todo o Bootstrap)
+    function toggleTheme() {
+      var el = document.documentElement;
+      var next = el.getAttribute("data-bs-theme") === "dark" ? "light" : "dark";
+      el.setAttribute("data-bs-theme", next);
+      try { localStorage.setItem("crm_theme", next); } catch (e) {}
+      _syncThemeIcon();
+    }
+    function _syncThemeIcon() {
+      var dark = document.documentElement.getAttribute("data-bs-theme") === "dark";
+      var i = document.getElementById("theme-icon");
+      if (i) i.className = dark ? "bi bi-sun-fill" : "bi bi-moon-stars";
+      var m = document.querySelector('meta[name="theme-color"]');
+      if (m) m.setAttribute("content", dark ? "#0b1320" : "#14283d");
+    }
+    document.addEventListener("DOMContentLoaded", _syncThemeIcon);
+
+    // Registra o service worker (PWA / offline). Escopo raiz via rota /sw.js.
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("/sw.js").catch(function () {});
+      });
+    }
+  </script>
+</body>
+</html>

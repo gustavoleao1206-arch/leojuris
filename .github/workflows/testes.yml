@@ -1,0 +1,40 @@
+name: Testes do backend
+
+# Roda a suíte de autenticação e controle de acesso (backend/tests) em cada PR.
+# É o último ponto em que uma regressão de RBAC ainda não chegou à main.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"          # a mesma do Dockerfile (python:3.11-slim)
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      # Nenhum segredo é passado de propósito: a suíte sobe o app num SQLite
+      # temporário e bloqueia a rede (ver tests/conftest.py).
+      - name: pytest
+        run: pytest

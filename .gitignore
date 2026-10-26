@@ -1,0 +1,32 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Banco local (não versionar)
+backend/crm.db
+
+# Uploads locais (mantém a pasta, ignora o conteúdo)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Variáveis de ambiente
+.env
+
+# IDE / SO
+.idea/
+.vscode/
+.DS_Store
+
+# Mídias pesadas (limite de 100 MB por arquivo no GitHub)
+*.mp4
+*.mov
+*.avi
+
+# Backups do banco — NUNCA versionar: um dump traz CPF, telefone,
+# endereço e honorários de clientes.
+backups/
+*.dump
+*.sql.gz
+*.tar.gz

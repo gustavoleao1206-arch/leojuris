@@ -1,0 +1,13 @@
+# Fontes auto-hospedadas (frontend/assets/fontes e frontend/vendor). Esta
+# maquina roda com autocrlf: os avisos "LF will be replaced by CRLF" provam.
+# O git detecta binario por heuristica, mas aqui fica explicito - normalizar
+# fim de linha num .woff2 corrompe o arquivo, e o sintoma seria icone e
+# fonte invisiveis, nao um erro.
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+*.png   binary
+*.jpg   binary
+*.ico   binary

@@ -1,0 +1,51 @@
+# FastAPI 0.141.1 + Starlette 1.3.1 (out/2026). A starlette 0.37.2, que o
+# fastapi 0.111 puxava sem fixar, tinha 7 CVEs. Três alcançavam este app:
+# CVE-2024-47874 e CVE-2026-54283 (DoS de memória SEM login, pelo formulário
+# do /api/auth/login) e CVE-2026-48710 (Host malformado tirava a escrita da
+# trilha de auditoria). Ver tests/test_pilha_http.py.
+# Por que estas versões:
+#  - fastapi 0.141.1 é a última antes do OpenTelemetry embutido (0.142) e da
+#    leva de mudanças em formulários de out/2026 (0.145 em diante);
+#  - starlette 1.3.1 é a primeira sem nenhuma das 7 CVEs e a mesma com que o
+#    CI do próprio FastAPI rodava a 0.141.1.
+# ATENÇÃO: a starlette fica FIXADA aqui de propósito. Como dependência
+# transitiva ela não aparece para o Dependabot e envelhece sem ninguém ver.
+# Suba as duas JUNTAS: uma sem a outra é combinação que ninguém testou.
+# Desde o FastAPI 0.137 `app.routes` é uma árvore, não lista plana. Quem
+# varre rotas usa `iter_route_contexts` (ver tests/conftest.py).
+# Sem emoji neste arquivo: pip antigo no Windows o lê como cp1252, e o byte
+# 0x8F do emoji de alerta derruba o `pip install -r` com UnicodeDecodeError.
+fastapi==0.141.1
+starlette==1.3.1
+uvicorn[standard]==0.30.1
+sqlalchemy==2.0.30
+# 2.9+ é exigência do fastapi 0.141. O formato do 422 que o frontend lê não
+# mudou (tests/test_pilha_http.py::test_422_mantem_o_formato_que_o_frontend_le).
+pydantic==2.13.5
+pydantic[email]==2.13.5
+# PyJWT no lugar de python-jose: o jose 3.3.0 tem CVE-2024-33663 (confusão de
+# algoritmo) e CVE-2024-33664 (DoS), e está sem manutenção ativa. É a lib que
+# valida todo login — não é lugar para dependência abandonada.
+# 2.15.1 (out/2026): a 2.13.0 tinha 13 alertas do Dependabot. O CRM usa um só
+# algoritmo (HS256) com segredo, e revoga por `token_version` no payload, então a
+# maioria não o alcançava — mas um token com cabeçalho aninhado derrubava o
+# decode com RecursionError (500 para qualquer anônimo). Ver test_token_malformado.
+PyJWT==2.15.1
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+# 0.0.9 tinha 8 CVEs, incluindo CVE-2026-24486 (escrita arbitrária de arquivo).
+# É a lib que processa os uploads de documentos.
+python-multipart==0.0.32
+psycopg2-binary==2.9.9
+reportlab==4.2.2
+openpyxl==3.1.5
+python-docx==1.1.2
+pyotp==2.9.0
+# Testes (backend/tests). O httpx é o que o TestClient usa por baixo. O
+# fastapi 0.111 o instalava junto; desde o 0.112 NÃO instala mais — sem esta
+# linha a suíte nem importa. Fixar também evita que um release novo mude o
+# comportamento dos testes sem aviso.
+# 9.x: a 8.3.5 tinha alerta de tmpdir inseguro (corrigido na 9.0.3).
+pytest==9.1.1
+httpx==0.28.1
+
