@@ -15,7 +15,7 @@ import openpyxl
 import pytest
 
 from app import models
-from app.routers.precatorios import _resolver_cabecalhos
+from app.routers.precatorios import DESCARTAR, _resolver_cabecalhos
 
 END = "requerente_endereco"
 
@@ -44,7 +44,7 @@ def _resolve(headers):
     ("Bairro do requerente", (END, "bairro")),      # ia para o NOME
     ("Endereço de e-mail", ("requerente_email", None)),
     ("Endereço eletrônico", ("requerente_email", None)),
-    ("Estado civil", (None, None)),                 # não é endereço
+    ("Estado civil", (DESCARTAR, None)),            # não é endereço (e não vai para observações)
     ("Telefone residencial", ("requerente_telefone", None)),
     # a mesma armadilha nos outros campos pessoais: todos iam para o NOME
     ("CPF do requerente", ("requerente_cpf", None)),

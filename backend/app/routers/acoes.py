@@ -72,6 +72,19 @@ def _mascarar(a, user):
     return out
 
 
+def _propagar_dono_acao(db: Session, acao_id: int, novo_dono):
+    """O caso mudou de responsável: os anexos que são SÓ do caso vão junto
+    (mesma regra de `precatorios._propagar_dono_caso`). Anexo também ligado a
+    cliente, processo ou precatório nasce com o dono deles e fica. Ação não tem
+    procuração vinculada. Sem commit — roda na transação de quem chama."""
+    db.query(models.Document).filter(
+        models.Document.acao_id == acao_id,
+        models.Document.client_id.is_(None),
+        models.Document.process_id.is_(None),
+        models.Document.precatorio_id.is_(None),
+    ).update({models.Document.owner_id: novo_dono}, synchronize_session=False)
+
+
 @router.get("", response_model=List[schemas.AcaoOut])
 def list_acoes(
     area: Optional[str] = None,
@@ -119,7 +132,7 @@ def create_acao(
     db.add(a)
     db.commit()
     db.refresh(a)
-    return a
+    return _mascarar(a, current_user)
 
 
 @router.get("/{acao_id}", response_model=schemas.AcaoOut)
@@ -170,6 +183,7 @@ def update_acao(
         setattr(a, field, value)
     if owner is not None and is_admin(current_user):
         a.owner_id = owner
+        _propagar_dono_acao(db, a.id, owner)
     db.commit()
     db.refresh(a)
     # 🚨 Mascarar a RESPOSTA também — mesmo vazamento do update_precatorio:
@@ -208,9 +222,10 @@ def assumir_acao(
         raise HTTPException(status_code=403, detail="Este caso já tem um responsável.")
     ensure_area(a, current_user)
     a.owner_id = current_user.id
+    _propagar_dono_acao(db, a.id, current_user.id)   # ver assumir_precatorio
     db.commit()
     db.refresh(a)
-    return a
+    return _mascarar(a, current_user)
 
 
 @router.post("/{acao_id}/liberar", response_model=schemas.AcaoOut)
@@ -228,9 +243,10 @@ def liberar_acao(
         raise HTTPException(status_code=403, detail="Apenas o responsável ou o admin podem liberar este caso.")
     ensure_area(a, current_user)
     a.owner_id = None
+    _propagar_dono_acao(db, a.id, None)
     db.commit()
     db.refresh(a)
-    return a
+    return _mascarar(a, current_user)
 
 
 # ---------------- Histórico de contatos ----------------
@@ -317,7 +333,9 @@ def acao_timeline(
                 "tipo": "contato", "data": ct.data.isoformat(),
                 "titulo": f"Contato • {ct.tipo}", "detalhe": ct.descricao or "",
             })
-    docs = db.query(models.Document).filter(models.Document.acao_id == acao_id).all()
+    # Régua ÚNICA de documentos — ver o mesmo trecho em precatorios.py.
+    from .documents import query_documents   # import local: evita ciclo de import
+    docs = query_documents(db, current_user, acao_id=acao_id).all()
     for d in docs:
         if d.uploaded_at:
             events.append({

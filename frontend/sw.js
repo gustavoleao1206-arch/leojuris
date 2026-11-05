@@ -14,7 +14,7 @@
 // Ver o comentário no próprio handler. O engano aconteceu porque, logo após
 // desregistrar o SW, a página carrega bem (aquele load não é controlado) e só
 // quebra na recarga seguinte.
-const CACHE = "leojuris-v55";
+const CACHE = "leojuris-v56";
 const SHELL = [
   "/",
   "/static/style.css",

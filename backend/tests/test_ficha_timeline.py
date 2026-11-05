@@ -15,6 +15,8 @@ import pytest
 
 from app import models
 
+from conftest import DATA_PRAZO_ANA
+
 TIPOS = {"cadastro", "processo", "prazo", "audiencia", "documento", "andamento", "publicacao",
          "atendimento", "honorario", "parte", "assinatura"}
 CAMPOS = {"tipo", "data", "titulo", "detalhe", "processo_id", "processo_numero", "ref_id", "autor"}
@@ -45,7 +47,7 @@ def test_formato_da_timeline_do_processo(client, db, cenario):
     assert datas == sorted(datas, reverse=True)
     prazo = next(e for e in eventos if e["tipo"] == "prazo")
     assert prazo["titulo"] == "Prazo cadastrado: Contestação"
-    assert "vence 01/12/2026" in prazo["detalhe"]
+    assert f"vence {DATA_PRAZO_ANA:%d/%m/%Y}" in prazo["detalhe"]
     aud = next(e for e in eventos if e["tipo"] == "audiencia")
     assert aud["titulo"] == "Audiência marcada para 02/12/2026 14:00"
     assert all(e["processo_id"] == cenario.proc_ana for e in eventos)

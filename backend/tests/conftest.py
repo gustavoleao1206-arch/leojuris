@@ -35,7 +35,7 @@ import smtplib
 import sys
 import tempfile
 import urllib.request
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -71,6 +71,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app import auth as app_auth  # noqa: E402
 from app import database, models, ratelimit  # noqa: E402
 from app.main import app  # noqa: E402
+from app.prazos import hoje_local  # noqa: E402
 from app.routers.auth import _claims  # noqa: E402
 from app.scope import normalizar_permissoes  # noqa: E402
 
@@ -223,6 +224,10 @@ def _salvar(db, obj):
 CPF_FILA = "111.111.111-11"
 CPF_ANA = "222.222.222-22"
 CPF_BRUNO = "333.333.333-33"
+# Prazo da Ana sempre no FUTURO. Era date(2026, 12, 1): data fixa vira bomba-relógio
+# — a fixture `mistura` tinha um prazo em 01/11/2026 e, passado o dia, a suíte
+# começou a falhar em "vencido" sem ninguém ter mexido no código.
+DATA_PRAZO_ANA = hoje_local() + timedelta(days=28)
 
 
 def _dados_requerente(sufixo, cpf):
@@ -315,7 +320,7 @@ def cenario(db):
     c.proc_bruno = _salvar(db, models.Process(client_id=c.cli_bruno, case_number="PROC-BRUNO", owner_id=bruno.id))
 
     c.prazo_ana = _salvar(db, models.Deadline(
-        process_id=c.proc_ana, date=date(2026, 12, 1), description="Contestação", owner_id=ana.id,
+        process_id=c.proc_ana, date=DATA_PRAZO_ANA, description="Contestação", owner_id=ana.id,
     ))
     c.agenda_ana = _salvar(db, models.Appointment(
         process_id=c.proc_ana, date_time=datetime(2026, 12, 2, 14, 0), location="Fórum", owner_id=ana.id,

@@ -93,6 +93,36 @@ def _mascarar(p, user):
     return out
 
 
+def _propagar_dono_caso(db: Session, precatorio_id: int, novo_dono):
+    """O caso mudou de responsável: anexos e procurações vão junto.
+
+    🚨 Documento e assinatura recebem o dono SÓ ao nascer, e o `scope()` de
+    Documentos/Assinaturas filtra por esse dono. Sem propagar, quem LIBERAVA o
+    caso continuava baixando o RG e a procuração (com CPF, RG e endereço) de um
+    lead que já não alcança — e quem assumia depois não via nenhum dos dois.
+    Ao liberar (`novo_dono=None`) eles ficam só com admin e estagiário, como o
+    próprio lead da fila.
+
+    Diferente do processo (`processes._propagar_dono`), aqui a procuração vai
+    junto: é documento do requerente do caso, decisão do dono (nov/2026).
+
+    🚨 Só o que é SÓ do caso. Anexo também ligado a um cliente ou processo
+    nasce com o dono DELES (`documents._validar_vinculos_upload`), e procuração com
+    cliente pertence à ficha do cliente: levar junto tirava da advogada o
+    documento da própria cliente e entregava a quem assumiu o caso.
+    Sem commit — roda na transação de quem chama.
+    """
+    db.query(models.Document).filter(
+        models.Document.precatorio_id == precatorio_id,
+        models.Document.client_id.is_(None),
+        models.Document.process_id.is_(None),
+    ).update({models.Document.owner_id: novo_dono}, synchronize_session=False)
+    db.query(models.Assinatura).filter(
+        models.Assinatura.precatorio_id == precatorio_id,
+        models.Assinatura.client_id.is_(None),
+    ).update({models.Assinatura.owner_id: novo_dono}, synchronize_session=False)
+
+
 def _filtrar_responsavel(query, responsavel: str, user):
     """Filtro por responsável: "meus", "fila", "atribuidos" ou o ID de um usuário.
 
@@ -232,7 +262,7 @@ def create_precatorio(
     db.add(p)
     db.commit()
     db.refresh(p)
-    return p
+    return _mascarar(p, current_user)
 
 
 # ----------------------- Importação de Excel -----------------------
@@ -329,6 +359,8 @@ _PALAVRAS_PESSOAIS = {
     "contato": "requerente_telefone",
     "email": "requerente_email", "mail": "requerente_email",
     "nascimento": "requerente_nascimento",
+    # "Documento do beneficiário" ia para o NOME pela palavra "beneficiario".
+    "documento": "requerente_cpf",
 }
 # "Número"/"Nº" só é o número da casa LOGO DEPOIS da coluna do logradouro
 # ("Rua | Nº"). Em outra posição costuma ser contador de linha ou nº de
@@ -336,20 +368,111 @@ _PALAVRAS_PESSOAIS = {
 _NUMERO_DA_CASA = {"numero", "num", "nro", "no", "n", "nº", "n°",
                    "numero da casa", "numero residencial"}
 
+# 🚨 Coluna que NÃO pode virar campo do requerente nem ir para `observacoes`,
+# que não é mascarado — e todo lead importado entra na FILA, à vista de qualquer
+# advogado. Ela é DESCARTADA e o admin recebe um aviso com o nome da coluna.
+#
+# (1) Dado de TERCEIRO (família, curador). A aproximação mandava "Nome da mãe"
+#     para o NOME do requerente (apagava o dele e mostrava o de outra pessoa), e
+#     "CPF do cônjuge" iria para o CPF dele pela palavra "cpf". Herdeiro e
+#     sucessor têm regra própria (_SUCESSORES, abaixo).
+_TERCEIROS = {
+    "mae", "pai", "genitor", "genitora", "conjuge", "esposa", "esposo", "marido",
+    "companheiro", "companheira", "filho", "filha", "irmao", "irma", "filiacao",
+    "dependente", "curador", "curadora", "tutor", "tutora", "representante",
+    "inventariante", "testemunha",
+}
+# (2) Dado pessoal do requerente SEM campo próprio no CRM: documentos, dados
+#     bancários (a conta do depósito é o que o golpe do precatório procura),
+#     saúde (dado sensível, art. 11 da LGPD) e afins.
+_PESSOAIS_SEM_CAMPO = {
+    "civil", "profissao", "ocupacao", "pis", "pasep", "nit", "nis", "ctps", "cnh",
+    "passaporte", "eleitor", "naturalidade", "nacionalidade", "sexo", "genero",
+    "salario", "pix", "senha", "raca", "etnia", "religiao", "conta", "agencia",
+    "bancario", "beneficio", "matricula", "siape", "saude", "doenca", "deficiencia",
+    "cid",
+}
+# "Renda" fica FORA de propósito: "Imposto de renda" é coluna de valor do caso.
+# (3) Dado PROFISSIONAL (advogado/procurador do processo): é público e ajuda a
+#     triagem, então continua em `observacoes`. Mas NUNCA vira campo do
+#     requerente — "Nome do Advogado" sobrescrevia o NOME dele. Pode casar com
+#     campo do caso ("Honorários do advogado" → percentual de honorários).
+_PROFISSIONAIS = {"advogado", "advogada", "patrono", "patrona", "procurador",
+                  "procuradora", "oab"}
+# (4) HERDEIRO / SUCESSOR numa lista de habilitação. O requerente do lead é o
+#     TITULAR do precatório, mesmo falecido (decisão do dono, nov/2026): "Nome
+#     do falecido" e "CPF do falecido" vão para o requerente. Antes vencia a
+#     última coluna, e o lead ficava com o nome de um e o CPF e o telefone do
+#     outro. Do herdeiro, o NOME vai para `observacoes` (triagem); CPF,
+#     telefone, e-mail, endereço e nascimento dele são descartados com aviso.
+_SUCESSORES = {"herdeiro", "herdeira", "sucessor", "sucessora"}
+# Marcador de coluna descartada em `_resolver_cabecalhos`.
+DESCARTAR = "__descartar__"
+
+
+def _raiz(palavra: str) -> str:
+    """Singular aproximado ("credores" → "credor", "profissoes" → "profissao").
+
+    Basta para casar cabeçalho com alias: os dois passam por aqui."""
+    if len(palavra) > 4 and palavra.endswith(("oes", "aes")):
+        return palavra[:-3] + "ao"
+    if len(palavra) > 4 and palavra.endswith(("res", "zes", "ses")):
+        return palavra[:-2]
+    if len(palavra) > 3 and palavra.endswith("ns"):
+        return palavra[:-2] + "m"
+    if len(palavra) > 3 and palavra.endswith("s"):
+        return palavra[:-1]
+    return palavra
+
+
+def _tokens(texto_normalizado) -> set:
+    """Palavras do cabeçalho, no singular ("Beneficiários" = "beneficiario").
+
+    A aproximação compara PALAVRAS, não pedaços: por substring, "Conta" casava
+    com "contato" (e caía no telefone), "Cargo" com "rg" e "Documentação" com
+    "doc" (e caía no CPF)."""
+    return {_raiz(w) for w in re.findall(r"[a-z0-9]+", texto_normalizado)}
+
+
+# Valor com FORMATO de documento ou contato numa coluna SEM campo próprio: não
+# vai para `observacoes` (ver acima). Só formatos inequívocos: número cru
+# (RPV, requisição, data do Excel, valor em reais) passaria por CPF ou telefone
+# e seria descartado à toa. CNJ não é dado pessoal e é tirado antes.
+_PARECE_PESSOAL = re.compile(
+    r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"            # CPF formatado
+    r"|\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b"     # CNPJ formatado
+    r"|\b\d{3}\.\d{5}\.\d{2}-\d\b"              # PIS/NIT formatado
+    r"|\(\d{2}\)\s?9?\d{4}-?\d{4}\b"            # telefone com DDD entre parênteses
+    r"|\b\d{2}\s9\d{4}-\d{4}\b"                  # celular com DDD sem parênteses
+    r"|[\w.+-]+@[\w-]+\.[a-z]{2,}"              # e-mail
+)
+_CNJ = re.compile(r"\b\d{7}-?\d{2}\.?\d{4}\.?\d\.?\d{2}\.?\d{4}\b")
+
+
+def _parece_dado_pessoal(texto: str) -> bool:
+    return bool(_PARECE_PESSOAL.search(_CNJ.sub(" ", texto)))
+
 
 def _resolver_cabecalhos(headers) -> dict:
     """Coluna -> (campo do modelo, cabeçalho original, parte do endereço ou None).
 
     Ordem de precedência: alias exato do _COLMAP → alias exato de parte de
-    endereço → palavra de campo pessoal no cabeçalho → palavra de endereço no
-    cabeçalho → "Nº" colado na rua → aproximação do _COLMAP. Tudo que é dado
+    endereço → coluna a DESCARTAR (terceiro ou pessoal sem campo) → palavra de
+    campo pessoal no cabeçalho → palavra de endereço no cabeçalho → "Nº" colado
+    na rua → aproximação do _COLMAP, por palavra inteira. Tudo que é dado
     pessoal vem ANTES da aproximação, porque é ela que transformava "CPF do
     requerente" e "CEP do requerente" em NOME.
+
+    A aproximação tenta, nesta ordem: as mesmas palavras do alias; o alias
+    inteiro dentro do cabeçalho (o mais longo vence: "Valor requisitado (R$)");
+    o cabeçalho dentro do alias ("Número" → número originário), menos quando
+    ele tem palavra curta ("Nº" é contador de linha).
     """
     rev = {}
     for campo, aliases in _COLMAP.items():
         for a in aliases:
             rev[_norm(a)] = campo
+    rev_tokens = [(_tokens(a), fld) for a, fld in rev.items() if a]
     rev_endereco = {_norm(a): parte for parte, aliases in _ENDERECO_PARTES.items() for a in aliases}
 
     col_field = {}
@@ -359,23 +482,53 @@ def _resolver_cabecalhos(headers) -> dict:
         if not nh:
             parte_anterior = None
             continue
-        palavras = set(re.findall(r"[a-z0-9]+", nh))
+        palavras = _tokens(nh)
+        profissional = bool(palavras & _PROFISSIONAIS)
         campo, parte = rev.get(nh), None
         if not campo:
             parte = rev_endereco.get(nh)
-        if not campo and not parte:
+        if not campo and not parte and palavras & (_TERCEIROS | _PESSOAIS_SEM_CAMPO):
+            col_field[ci] = (DESCARTAR, h, None)
+            parte_anterior = None
+            continue
+        if not campo and not parte and palavras & _SUCESSORES:
+            pessoal = any(w in palavras for w in _PALAVRAS_PESSOAIS) or (
+                not palavras & _ENDERECO_VETO and any(w in palavras for w in _ENDERECO_PALAVRAS))
+            col_field[ci] = (DESCARTAR if pessoal else None, h, None)
+            parte_anterior = None
+            continue
+        if not campo and not parte and not profissional:
             campo = next((c for w, c in _PALAVRAS_PESSOAIS.items() if w in palavras), None)
-        if not campo and not parte and not palavras & _ENDERECO_VETO:
+        if not campo and not parte and not profissional and not palavras & _ENDERECO_VETO:
             parte = next((p for w, p in _ENDERECO_PALAVRAS.items() if w in palavras), None)
         if not campo and not parte and nh in _NUMERO_DA_CASA and parte_anterior == "logradouro":
             parte = "numero"
         if parte:
             campo = "requerente_endereco"
-        if not campo:
-            for a, fld in rev.items():
-                if a and (a in nh or nh in a):
-                    campo = fld
-                    break
+        if not campo and palavras:     # "#", "%", "—": sem palavra, sem campo
+            # Coluna de advogado nunca alcança campo do requerente.
+            candidatos = [(ta, fld) for ta, fld in rev_tokens
+                          if not (profissional and fld.startswith("requerente_"))]
+            curto = any(len(w) < 3 for w in palavras)
+            ordem = [_raiz(w) for w in re.findall(r"[a-z0-9]+", nh)]
+
+            def _posicao(ta):
+                return min(ordem.index(w) for w in ta)
+
+            # Alias contido no cabeçalho: vence o que aparece PRIMEIRO, porque o
+            # núcleo vem antes do complemento ("Banco do beneficiário" é banco,
+            # não nome; "Situação do requisitório" é situação, não o número).
+            # E o NOME só pela 1ª palavra: "Cota-parte" não é nome de ninguém.
+            contidos = sorted(
+                ((ta, fld) for ta, fld in candidatos if ta <= palavras
+                 and not (fld == "requerente_nome" and _posicao(ta) > 0)),
+                key=lambda c: (_posicao(c[0]), -len(c[0])),
+            )
+            campo = (
+                next((fld for ta, fld in candidatos if ta == palavras), None)
+                or next((fld for _, fld in contidos), None)
+                or (None if curto else next((fld for ta, fld in candidatos if palavras <= ta), None))
+            )
         col_field[ci] = (campo, h, parte)
         parte_anterior = parte
     return col_field
@@ -580,6 +733,13 @@ def importar_excel(
 
     criados = 0
     ignorados = []   # duplicados que NÃO foram importados
+    # Colunas (ou valores) que NÃO entraram por serem dado pessoal sem lugar
+    # mascarado. O admin precisa saber, senão acha que a planilha veio incompleta.
+    avisos = {}
+    for campo, orig, _ in col_field.values():
+        if campo == DESCARTAR:
+            avisos[orig] = (f"Coluna \"{_cell_to_str(orig)}\" não importada: dado pessoal "
+                            "sem campo próprio no CRM (ou de outra pessoa).")
     # 🚨 LGPD: o resumo da IA usa só AGREGADOS — contagens e somas, nunca o
     # registro da pessoa. Antes, um laço mandava nome completo + CPF de até 200
     # titulares ao Gemini (Google, EUA) a cada importação, sem opt-in nem aviso
@@ -633,12 +793,20 @@ def importar_excel(
                 c = _parse_classif(val)
                 if c:
                     dados[campo] = c
+            elif campo == DESCARTAR:
+                continue
             elif campo:
                 txt = _cell_to_str(val)
                 lim = _LIMITS.get(campo)
                 dados[campo] = txt[:lim] if lim else txt
             elif orig:
-                extras.append(f"{orig}: {_cell_to_str(val)}")
+                txt = _cell_to_str(val)
+                if _parece_dado_pessoal(txt):
+                    avisos.setdefault(orig, (
+                        f"Coluna \"{_cell_to_str(orig)}\": valores com cara de CPF, telefone, "
+                        "e-mail ou número de documento não foram importados."))
+                    continue
+                extras.append(f"{orig}: {txt}")
         if endereco:
             dados["requerente_endereco"] = _compor_endereco(endereco)
 
@@ -720,6 +888,7 @@ def importar_excel(
         "criados": criados,
         "ignorados": len(ignorados),
         "detalhe_ignorados": ignorados[:200],
+        "avisos": list(avisos.values()),
         "analise": analise,
     }
 
@@ -920,6 +1089,7 @@ def liberar_lote(
             ignorados += 1
             continue
         p.owner_id = None
+        _propagar_dono_caso(db, p.id, None)
         liberados += 1
     db.commit()
     return {"ok": True, "liberados": liberados, "ignorados": ignorados}
@@ -980,6 +1150,7 @@ def update_precatorio(
         setattr(p, field, value)
     if owner is not None and is_admin(current_user):
         p.owner_id = owner
+        _propagar_dono_caso(db, p.id, owner)
     db.commit()
     db.refresh(p)
     # 🚨 A RESPOSTA passa pela máscara também. Devolvia `p` cru: um `PUT {}`
@@ -1095,9 +1266,13 @@ def assumir_precatorio(
     # Não pode assumir caso de uma classificação que ele nem tem permissão de ver.
     ensure_classificacao(p, current_user)
     p.owner_id = current_user.id
+    # Reassumir o próprio caso também propaga: acerta anexo antigo (de antes da
+    # propagação existir) que ficou com outro dono. O que é de cliente ou
+    # processo o filtro de _propagar_dono_caso não toca.
+    _propagar_dono_caso(db, p.id, current_user.id)
     db.commit()
     db.refresh(p)
-    return p
+    return _mascarar(p, current_user)
 
 
 @router.post("/{precatorio_id}/liberar", response_model=schemas.PrecatorioOut)
@@ -1118,9 +1293,10 @@ def liberar_precatorio(
         raise HTTPException(status_code=403, detail="Apenas o responsável ou o admin podem liberar este caso.")
     ensure_classificacao(p, current_user)
     p.owner_id = None
+    _propagar_dono_caso(db, p.id, None)
     db.commit()
     db.refresh(p)
-    return p
+    return _mascarar(p, current_user)
 
 
 # ---------------- Histórico de contatos (gestão comercial) ----------------
@@ -1213,11 +1389,11 @@ def precatorio_timeline(
                 "titulo": f"Contato • {ct.tipo}",
                 "detalhe": ct.descricao or "",
             })
-    docs = (
-        db.query(models.Document)
-        .filter(models.Document.precatorio_id == precatorio_id)
-        .all()
-    )
+    # 🚨 A régua ÚNICA de documentos (dono, módulo e classificação). A consulta
+    # crua mostrava ao advogado, num lead da fila, o NOME dos anexos que a tela
+    # de Documentos esconde dele — e nome de arquivo costuma trazer CPF.
+    from .documents import query_documents   # import local: evita ciclo de import
+    docs = query_documents(db, current_user, precatorio_id=precatorio_id).all()
     for d in docs:
         if d.uploaded_at:
             events.append({

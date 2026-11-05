@@ -147,3 +147,151 @@ def test_estagiario_alimenta_dado_de_precatorio_da_fila(client, cenario):
     assert resp.status_code == 200
     assert resp.json()["requerente_telefone"] == "(82) 97777-0000"
     assert resp.json()["requerente_cpf"] == CPF_FILA
+
+
+# ----------- escritas que devolvem o registro: o liberar é a perigosa -----------
+@pytest.mark.parametrize("entidade", ENTIDADES)
+def test_liberar_devolve_mascarado(client, cenario, entidade):
+    # Liberar transforma o caso em lead da FILA no mesmo commit: a resposta já
+    # tem de sair como a fila sai para o advogado. Antes ela voltava crua, com
+    # CPF, telefone e endereço de um lead que ele não alcança mais.
+    base, _, meu, campos, _ = ENTIDADES[entidade]
+    resp = client.post(f"{base}/{getattr(cenario, meu)}/liberar", headers=cenario.auth["ana"])
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["owner_id"] is None
+    for campo in campos:
+        assert corpo.get(campo) is None, f"{campo} vazou: {corpo.get(campo)!r}"
+    assert CPF_ANA not in resp.text
+
+
+@pytest.mark.parametrize("entidade", ENTIDADES)
+def test_admin_libera_e_continua_vendo(client, cenario, entidade):
+    # Controle: a máscara depende de quem lê, não da rota.
+    base, _, meu, campos, _ = ENTIDADES[entidade]
+    resp = client.post(f"{base}/{getattr(cenario, meu)}/liberar", headers=cenario.auth["admin"])
+    assert resp.status_code == 200
+    assert resp.json()["owner_id"] is None
+    _assert_visivel(resp.json(), campos)
+    assert resp.json()[campos[0]] == CPF_ANA
+
+
+@pytest.mark.parametrize("entidade", ENTIDADES)
+def test_assumir_devolve_o_caso_inteiro(client, cenario, entidade):
+    # Quem assume vira dono: passar pela máscara não pode esconder nada dele.
+    base, fila, _, campos, _ = ENTIDADES[entidade]
+    resp = client.post(f"{base}/{getattr(cenario, fila)}/assumir", headers=cenario.auth["ana"])
+    assert resp.status_code == 200
+    _assert_visivel(resp.json(), campos)
+    assert resp.json()[campos[0]] == CPF_FILA
+
+
+@pytest.mark.parametrize("entidade", ENTIDADES)
+def test_criar_na_fila_devolve_mascarado(client, cenario, entidade):
+    # O advogado cria o lead, que nasce sem dono: a resposta sai como a fila sai
+    # para ele (o GET seguinte diria o mesmo). A tela só usa o id da resposta.
+    base, _, _, campos, _ = ENTIDADES[entidade]
+    dados = {campo: "dado digitado" for campo in campos}
+    dados[campos[0]] = CPF_FILA
+    resp = client.post(base, headers=cenario.auth["ana"], json=dados)
+    assert resp.status_code == 200
+    assert resp.json()["owner_id"] is None
+    _assert_mascarado(resp.json(), campos, resp.text)
+
+
+def _retornos_crus(modulo, schema_out):
+    """Rotas que devolvem `schema_out` (ou List[...]) com algum `return` que não
+    passa por `_mascarar`. Pega a rota NOVA que alguém criar amanhã.
+
+    Conta como rota que devolve o registro tanto o `response_model=` do
+    decorator quanto a anotação de retorno (`-> schemas.PrecatorioOut`), que o
+    FastAPI também usa. Regra de estilo: o `_mascarar` vai no próprio `return`
+    (ou na list comprehension do `return`); guardar numa variável antes é
+    acusado, de propósito, para a regra continuar verificável."""
+    import ast
+    import inspect
+
+    rotas = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+    def _returns_da_propria(fn):
+        # Desce no corpo sem entrar em funções aninhadas: o `return` de um
+        # helper interno não é a resposta da rota.
+        pilha = list(fn.body)
+        while pilha:
+            no = pilha.pop()
+            if isinstance(no, rotas + (ast.Lambda, ast.ClassDef)):
+                continue
+            if isinstance(no, ast.Return):
+                yield no
+            pilha.extend(ast.iter_child_nodes(no))
+
+    arvore = ast.parse(inspect.getsource(modulo))
+    crus = []
+    for fn in ast.walk(arvore):
+        if not isinstance(fn, rotas):
+            continue
+        no_decorator = any(
+            isinstance(d, ast.Call) and any(
+                k.arg == "response_model" and schema_out in ast.unparse(k.value)
+                for k in d.keywords
+            )
+            for d in fn.decorator_list
+        )
+        na_anotacao = fn.returns is not None and schema_out in ast.unparse(fn.returns)
+        if not (no_decorator or na_anotacao):
+            continue
+        for no in _returns_da_propria(fn):
+            if no.value is None:
+                continue
+            alvo = no.value.elt if isinstance(no.value, ast.ListComp) else no.value
+            chamada = isinstance(alvo, ast.Call) and ast.unparse(alvo.func) == "_mascarar"
+            if not chamada:
+                crus.append(f"{fn.name}: return {ast.unparse(no.value)}")
+    return crus
+
+
+def test_a_trava_acusa_o_que_promete():
+    # Contraprova: sem ela, "lista vazia" e "trava quebrada" dão o mesmo verde.
+    import types
+    import textwrap
+
+    falso = types.ModuleType("rotas_falsas")
+    falso.__file__ = __file__
+    codigo = textwrap.dedent('''
+        @router.get("/a", response_model=schemas.PrecatorioOut)
+        def crua(p):
+            return p
+
+        @router.get("/b", response_model=schemas.PrecatorioOut)
+        async def assincrona(p):
+            return p
+
+        @router.get("/c")
+        def anotada(p) -> schemas.PrecatorioOut:
+            return p
+
+        @router.get("/d", response_model=List[schemas.PrecatorioOut])
+        def lista_certa(ps, u):
+            return [_mascarar(p, u) for p in ps]
+
+        @router.get("/e", response_model=schemas.PrecatorioOut)
+        def com_helper(p, u):
+            def _id(x):
+                return x.id
+            return _mascarar(p, u)
+    ''')
+    import inspect
+    original = inspect.getsource
+    inspect.getsource = lambda m: codigo if m is falso else original(m)
+    try:
+        acusadas = {linha.split(":")[0] for linha in _retornos_crus(falso, "PrecatorioOut")}
+    finally:
+        inspect.getsource = original
+    assert acusadas == {"crua", "assincrona", "anotada"}
+
+
+def test_toda_rota_que_devolve_o_registro_passa_pela_mascara():
+    # A regra do projeto ("toda rota que devolva PrecatorioOut/AcaoOut
+    # passa por _mascarar") já foi esquecida no PUT e depois no liberar.
+    assert _retornos_crus(prec_router, "PrecatorioOut") == []
+    assert _retornos_crus(acoes_router, "AcaoOut") == []

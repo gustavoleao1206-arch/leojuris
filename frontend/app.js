@@ -3531,12 +3531,20 @@ async function importarPrecatoriosExcel(input) {
         </div>
         ${r.ignorados > ign.length ? `<div class="small mt-1">…e mais ${r.ignorados - ign.length}.</div>` : ""}
       </div>` : "";
+    // Colunas (ou valores) descartadas por serem dado pessoal sem campo
+    // mascarado: entrariam em "observações", que todo advogado lê na fila.
+    const avisos = r.avisos || [];
+    const avisosHtml = avisos.length ? `
+      <div class="alert alert-info">
+        <div><i class="bi bi-eye-slash"></i> Por proteção de dados, isto <b>não</b> foi importado:</div>
+        <ul class="small mb-0 mt-1">${avisos.map(a => `<li>${esc(a)}</li>`).join("")}</ul>
+      </div>` : "";
     setTitle("Importação concluída");
     setBody(`
       <div class="alert ${r.criados ? "alert-success" : "alert-secondary"}"><i class="bi bi-check-circle"></i>
         <strong>${r.criados}</strong> precatório(s) importado(s) para a <strong>fila de triagem</strong>,
         sem classificação. Você define a categoria de cada um quando quiser.</div>
-      ${ignHtml}${analiseHtml}`);
+      ${ignHtml}${avisosHtml}${analiseHtml}`);
   } catch (e) {
     setTitle("Falha na importação");
     setBody(`<div class="alert alert-danger">${esc(e.message || "Erro ao importar")}</div>`);

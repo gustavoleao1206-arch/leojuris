@@ -10,12 +10,14 @@ vencido" entram na mesma `query_processes` — e o termo da busca vai para a
 trilha pseudonimizado, nunca cru (é nome de cliente / de parte / nº de processo).
 """
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pytest
 
 from app import models
 from app.prazos import hoje_local
+
+from conftest import DATA_PRAZO_ANA
 
 
 @pytest.fixture
@@ -26,9 +28,11 @@ def mistura(db, cenario):
     db.add(pb)
     db.commit()
     db.add_all([
-        models.Deadline(process_id=pb.id, date=date(2026, 11, 1), description="Prazo do Bruno",
+        models.Deadline(process_id=pb.id, date=hoje_local() + timedelta(days=30),
+                        description="Prazo do Bruno",
                         owner_id=cenario.bruno),
-        models.Appointment(process_id=pb.id, date_time=datetime(2026, 11, 2, 10, 0),
+        models.Appointment(process_id=pb.id,
+                           date_time=datetime.combine(hoje_local() + timedelta(days=31), time(10, 0)),
                            location="Vara do Bruno", owner_id=cenario.bruno),
         models.Document(process_id=pb.id, client_id=cenario.cli_ana, original_name="do-bruno.pdf",
                         file_path="x", owner_id=cenario.bruno),
@@ -178,7 +182,7 @@ def test_q_por_nome_do_cliente_e_escopo(client, cenario, mistura):
 def test_item_de_processo_traz_proximo_prazo_e_partes_contrarias(client, cenario, mistura):
     r = client.get("/api/processes", headers=cenario.auth["ana"])
     item = next(p for p in r.json() if p["id"] == cenario.proc_ana)
-    assert item["proximo_prazo"] == "2026-12-01"
+    assert item["proximo_prazo"] == DATA_PRAZO_ANA.isoformat()
     assert item["partes_contrarias"] == "Empresa Ré Ltda"
 
 
